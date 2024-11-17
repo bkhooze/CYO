@@ -1,0 +1,314 @@
+---
+title: "Analysis of Adult Income Dataset"
+author: "Benjamin Khoo"
+date: "2024-11-06"
+output: pdf_document
+---
+
+```{r setup, include=TRUE}
+if (!require(knitr)) 
+  install.packages("knitr", repos = "http://cran.us.r-project.org")
+library(knitr)
+# Attempt to keep code tidy
+opts_chunk$set(tidy.opts = list(width.cutoff=60), tidy=TRUE)
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Introduction
+
+The aim of this project is to design a machine learning algorithm to predict whether an individual earns more or less than $50k/year using the adult income dataset. This is a dataset containing 32561 observations of 15 variables. The first few lines of code have been provided to download the code from a GitHub repository. The original dataset may be found on Kaggle at the following website:
+
+https://www.kaggle.com/datasets/wenruliu/adult-income-dataset
+
+## Methods/Analysis
+
+## Load libraries using the if!require function, to download and install required packages only if required. 
+
+```{r, warning = FALSE, results = 'hide', message=FALSE}
+if (!require(formatR)) 
+  install.packages("formatR", repos = "http://cran.us.r-project.org")
+library(formatR)
+if (!require(tidyverse)) 
+  install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+library(tidyverse)
+```
+
+```{r, warning = FALSE, results = 'hide', message=FALSE, tidy=TRUE}
+if (!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+library(caret)
+if (!require(RCurl)) install.packages("RCurl",repos = "http://cran.us.r-project.org")
+library(RCurl)
+if (!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+library(ggplot2)
+if (!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+library(dplyr)
+if (!require(randomForest)) 
+  install.packages("randomForest", 
+                   repos = "http://cran.us.r-project.org")
+library(randomForest)
+if (!require(e1071)) install.packages("e1071", repos = "http://cran.us.r-project.org")
+library(e1071)
+if (!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+library(rpart)
+if (!require(rpart.plot)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+library(rpart.plot)
+if (!require(ROSE)) install.packages("ROSE", repos = "http://cran.us.r-project.org")
+library(ROSE)
+```
+
+## Load dataset from Github and gain an overview of the dataset
+
+```{r,tidy=TRUE}
+options(timeout = 120)
+x <- getURL("https://raw.githubusercontent.com/bkhooze/CYO/refs/heads/main/adult.csv")
+salary <- read.csv(text = x)
+head(salary)
+glimpse(salary)
+```
+
+The 15 variables in the dataset are:
+1. Age
+2. Workclass
+3. Fnlwgt
+4. Education
+5. Education numerical
+6. Marital status
+7. Occupation
+8. Relationship
+9. Race
+10. Sex
+11. Capital gain
+12. Capital loss
+13. Hours per week
+14. Native country
+15. Income
+
+## Recode values and drop missing values.
+
+From the preliminary exploration, noted values coded as ?. This is recoded to NA. 
+
+```{r}
+# Noted in this dataset missing values coded as ?, recode this to NA
+salary[salary == "?"] <- NA 
+salary %>% summarise_all(~ sum(is.na(.)))
+# Most columns have no missing values except workclass, occupation and native.country
+sum(is.na(salary$occupation))/length(salary$occupation)*100
+table(salary$workclass)
+table(salary$occupation)
+# Following code changes the NA values in the column workclass to "Private", which is the most common observation.
+salary <- salary %>% mutate(workclass = ifelse(is.na(workclass), "Private", workclass))
+salary <- na.omit(salary)
+salary %>% summarise_all(~ sum(is.na(.)))
+glimpse(salary)
+```
+Most columns have no missing values except workclass, occupation and native country, of which workclass and occupation have the most missing values. As the category with most observations for workclass is "Private", missing values for workclass were recoded to "Private". For occupation, as missing data was 5.7%, decision to proceed with complete case analysis for this project. The rows with NA values for occupation and native country were dropped. After processing, there are 30162 rows remaining in the dataset (original 32561).
+
+## Changing the columns in the dataset to appropriate variable type - numeric and factor respectively.
+
+```{r,tidy=TRUE}
+summary(salary)
+salary[]<- lapply(salary,trimws)
+num <- c(1,3,5,11,12,13)
+salary[num] <- sapply(salary[num], as.numeric)
+# Transform appropriate columns to numeric type
+cat <- c(2,4,6,7,8,9,10,14)
+salary[,cat] <- lapply(salary[,cat],factor)
+# Transform appropriate columns to factor type
+str(salary)
+```
+
+## Pre-processing data - removing columns with multiple repeated values.
+
+```{r, results = 'hide', message=FALSE, tidy=TRUE}
+table(salary$capital.gain)
+table(salary$capital.loss)
+table(salary$fnlwgt)
+# Removed columns fnlwgt, capital.gain and capital.loss in view of multiple repeated values, with more than 20000 values are "0". Also uncertain of how these affects the outcome variable, income.
+salary <- salary [-c(3,11,12)]
+str(salary)
+```
+## Data visualisation
+
+Various features in the dataset which may affect the outcome are presented here graphically.
+
+```{r, echo=FALSE}
+# Income grouped by sex and education level.
+salary %>%
+  group_by(sex, income) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+ggplot(aes(sex, count, fill = income)) +
+  geom_bar(stat="identity", position = "dodge") + xlab("Sex") + ylab("Count")
+salary %>%
+  group_by(education.num, income) %>%
+  summarise(count = n(), .groups = 'drop') %>% ggplot(aes(education.num, count, fill = income)) +  geom_bar(stat="identity", position = "dodge") + xlab("Education Number") + ylab("Count")
+```
+
+A greater proportion of males earned >$50k, compared to females. With increasing level of education, the proportion of people who have income > $50k increases. These feature may be used in subsequent model development.
+
+## Changing marital status to binary outcomes - 1 for married and 0 for not married
+
+```{r,tidy=TRUE}
+# Marital status has multiple categories - aim to recode as binary
+table(salary$marital.status)
+# Noted marital status consists of multiple values, to convert this to people who are married vs not
+salary <- salary %>% mutate(marriage_binary = ifelse(marital.status %in% c("Married-civ-spouse", 
+  "Married-AF-spouse", "Married-spouse-absent"), 1, 0))
+```
+
+```{r, echo=FALSE}
+salary %>%
+  group_by(marriage_binary, income) %>% 
+  summarise(count = n(), .groups = 'drop') %>% ggplot(aes(marriage_binary, count, fill = income)) + geom_bar(stat="identity", position = "dodge") + xlab("Not Married                                 Married") + ylab("Count") + scale_x_discrete(labels = NULL, breaks = NULL)
+# Income grouped by race
+salary %>% group_by(race, income) %>% summarise(count = n(), .groups = 'drop') %>%
+ggplot(aes(race, count, fill = income)) + geom_bar(stat="identity", position = "dodge") + xlab("Race") + ylab("Count") + scale_x_discrete(labels = abbreviate)
+table(salary$occupation)
+# Income grouped by occupation
+salary %>% group_by(occupation, income) %>% summarise(count = n(), .groups = 'drop') %>%
+  ggplot(aes(occupation, count, fill = income)) + geom_bar(stat="identity", position = "dodge") + scale_x_discrete(labels = abbreviate)
+```
+
+Refer to the table of occupations for the legend. Executive, professional and sales jobs seem to have the highest proportion of income earners > $50k.
+
+```{r, echo=FALSE}
+salary %>% group_by(age, income) %>% summarise(count = n(), .groups = 'drop') %>%
+  ggplot(aes(age, count, fill = income)) + geom_bar(stat="identity", position = "stack") 
+```
+Individuals in the 30 to 50 age range have the highest proportion of people earning >$50k a year.
+
+```{r, tidy=TRUE}
+# Recode income into binary outcomes, 0 if income <$50K and 1 if income >$50K. Drop marital status column as this has been coded into binary. Drop education column as this is coded in education.num.
+salary <- salary %>% mutate(income = ifelse(income == c("<=50K"), 0, 1))
+salary <- salary [-c(3,5)]
+str(salary)
+# Check if there is correlation between columns which are numeric correlate with each other
+correlation_var <- c("age", "education.num", "hours.per.week", "marriage_binary", "income")
+correlation <- round(cor(salary[correlation_var]),2)
+correlation
+```
+In the numeric variables in the dataset for analysis, there are no variables that are highly correlated with each other and thus all variables were included for the analysis.
+
+```{r, warning=FALSE, tidy=TRUE}
+# Partition into test and train set. Decision to use 0.3 for test set as outcome is somewhat unbalanced.
+set.seed(1, sample.kind = "Rounding")
+test_index <- createDataPartition(salary$income, times = 1, p = 0.3, list = FALSE)
+salary_train <- salary[-test_index,]
+salary_test <- salary[test_index,]
+```
+
+## Dealing with unbalanced dataset
+
+From the earlier exploration, it is noted that most individuals in the dataset earn <$50k, and therefore the dataset is imbalanced. An oversampling strategy was selected to deal with this issue, using the ROSE package.
+
+```{r}
+oversampled_data <- ovun.sample(income ~ ., data = salary_train, method = "over", N = 31656)$data
+table(oversampled_data$income)
+```
+
+## Results
+
+For this project, the base model using logistic regression was compared with the following machine learning methods: Random Forest, Support Vector Machines and Decision Tree. The outcome of interest was income as a binary variable i.e. more or less than $50k. These analyses were run using the balanced dataset created above.
+
+```{r}
+# Model 1: Logistic regression using oversampling to correct for imbalanced dataset
+fit_glm <- glm(income ~ ., data = oversampled_data, family = binomial("logit"))
+p_glm <- predict(fit_glm, salary_test, type = "response")
+p_glm <- as.factor(ifelse(p_glm > 0.5, "1", "0"))
+salary_test$income <- as.factor(salary_test$income)
+m1 <- confusionMatrix(p_glm, salary_test$income)
+m1
+```
+
+The accuracy of logistic regression to predict the outcome using balanced data was 0.781. 
+
+```{r,warning=FALSE}
+# Model 2: Random Forest
+fit_rf <- randomForest(income~., data = oversampled_data, ntree = 500)
+pred_rf <- predict(fit_rf, salary_test, type = "response")
+pred_rf <- as.factor(ifelse(pred_rf > 0.5, "1", "0"))
+m2 <- confusionMatrix(pred_rf, salary_test$income)
+m2
+```
+
+The accuracy of random forest to predict the outcome using balanced data was 0.810.
+
+```{r,warning=FALSE}
+# Model 3: Support Vector Machines
+fit_svm <- svm(income ~ ., data = oversampled_data)
+pred_svm <- predict(fit_svm, newdata = salary_test, type = "response")
+pred_svm <- as.factor(ifelse(pred_svm > 0.5, "1", "0"))
+m3 <- confusionMatrix(pred_svm, salary_test$income)
+m3
+```
+
+The accuracy of support vector machines to predict the outcome using balanced data was 0.737.
+
+```{r,warning=FALSE}
+# Model 4: Decision tree
+fit_dectree <- rpart(income~.,data=oversampled_data,method = "class")
+rpart.plot(fit_dectree, box.col=c("red","blue"))
+pred_dectree <- predict(fit_dectree, newdata = salary_test, type = "class")
+m4 <- confusionMatrix(pred_dectree, salary_test$income,positive="1")
+m4
+```
+
+The accuracy of decision tree to predict the outcome using balanced data was 0.774.
+
+# Calculating the F1 score
+
+F1 score was also calculated as this balances precision and recall, and provides a useful metric to assess a dataset where there is some imbalance and also provides a more stable model performance.
+
+```{r}
+f1_score <- function(model)
+{
+precision <- model$byClass["Pos Pred Value"]
+recall <- model$byClass["Sensitivity"]
+f1 <- 2 * (precision * recall) / (precision + recall)
+}
+f1m1 <- f1_score(m1)
+f1m2 <- f1_score(m2)
+f1m3 <- f1_score(m3)
+f1m4 <- f1_score(m4)
+```
+
+```{r, tidy=TRUE}
+options(digits = 3)
+results <- tibble(Model = c("Logistic Regression Balanced", "Random Forest", 
+                            "Support Vector Machines", "Decision Tree"),
+Accuracy = c(m1$overall["Accuracy"],m2$overall["Accuracy"],
+             m3$overall["Accuracy"],m4$overall["Accuracy"]),
+Sensitvity = c(m1$byClass["Sensitivity"],m2$byClass["Sensitivity"],
+               m3$byClass["Sensitivity"],m4$byClass["Sensitivity"]),
+Specificity = c(m1$byClass["Specificity"],m2$byClass["Specificity"],
+                m3$byClass["Specificity"],m4$byClass["Specificity"]),
+F1score = c(f1m1,f1m2,f1m3,f1m4)
+)
+results
+```
+
+The accuracy, sensitivity and specificity and F1 score of the various models to predict whether an individual earns $50k or more is displayed in the table above. These results were derived using the oversampling method to deal with an unbalanced dataset. Overall, the random forest model had the best accuracy of 0.810 and F1 score of 0.868 to predict the outcome.
+
+## Conclusion 
+
+Overall, machine learning using random forest model has modest improvement over logistic regression to predict whether the income of a person would be more or less than $50k. The advantage of accurate income classification would allow stakeholders to accurately predict income. This has multiple use cases - for finance institutions to cater for high or low income earners, for governments to plan for appropriate services for individuals earning <$50k a year. However, a binary classification of income is likely too broad, and having more income bands may be helpful. Another approach would be to treat income as a continuous variable, and machine learning approaches used to predict income.
+
+Other potential options to deal with an unbalanced dataset include the use of SMOTE (Synthetic Minority Oversampling Technique). Undersampling using the ROSE package is also an option, however, runs the risk of loss of statistical power. Other machine learning approaches include using K-nearest neighbour and XGboost. Combining models in the form of ensembles may also help to improve performance. 
+
+## Executive summary
+
+This project using an adult income dataset was a classification project to predict a binary outcome of whether an individual's income was more or less than $50k/year. The original dataset contained 32561 observations of 15 variables. With data cleaning, missing data was identified and imputed or removed. 3 columns fnlwgt, capital gain and capital loss with multiple repeated values and unclear relation to the outcome were removed.
+
+Following this, data visualisation was performed to analyse the relationship of features with the outcome. There were no highly correlated numeric values within the dataset. The  dataset was then split into train and test sets, with oversampling method used to augment the train set given the unbalanced dataset. 
+
+The various machine learning models that were performed included logistic regression, random forest, support vector machines and decision tree, with the findings as follows. The random forest model was had the best prediction accuracy of 0.810 and F1 score of 0.868. Improving the prediction of income may have benefits for banking and government sectors among others. Further options for future projects include using income as a continuous variable, as well as other machine learning approaches such as k-nearest neighbour, XGboost and the use of ensembles.
+
+Results of Machine Learning Approaches
+```{r, echo=FALSE}
+results
+```
+
+## References
+1. Introduction to Data Science. Rafael A Irizarry. 2019.
+https://rafalab.dfci.harvard.edu/dsbook/
+2. OpenAI. (2024). ChatGPT 3.5.
+3. https://www.kaggle.com/datasets/wenruliu/adult-income-dataset
+4. https://developers.google.com/machine-learning/crash-course/classification/accuracy-precision-recall
